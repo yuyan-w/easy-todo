@@ -1,0 +1,235 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  ProjectName:
+    Description: Project Name
+    Type: String
+    Default: EasyTODO
+  TagName:
+    Description: Tag name applied to all resources
+    Type: String
+    Default: EasyTODO
+
+Resources:
+  # =============================
+  # VPC
+  # =============================
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-vpc
+        - Key: project
+          Value: !Sub ${TagName}
+  # =============================
+  # Subnet
+  # =============================
+  ALBSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-alb-public-subnet-1a
+        - Key: project
+          Value: !Sub ${TagName}
+  ALBSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-alb-public-subnet-1c
+        - Key: project
+          Value: !Sub ${TagName}
+  NATSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.0.99.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-nat-public-subnet-1a
+        - Key: project
+          Value: !Sub ${TagName}
+  ECSSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.0.100.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ecs-private-subnet-1a
+        - Key: project
+          Value: !Sub ${TagName}
+  RDSSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.0.110.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-rds-private-subnet-1a
+        - Key: project
+          Value: !Sub ${TagName}
+  RDSSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: 10.0.111.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-rds-private-subnet-1c
+        - Key: project
+          Value: !Sub ${TagName}
+  ManagementSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.0.240.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-management-private-subnet-1a
+        - Key: project
+          Value: !Sub ${TagName}
+  # =============================
+  # インターネットゲートウェイ
+  # =============================
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-igw
+        - Key: project
+          Value: !Sub ${TagName}
+  # IGWをVPCへアタッチする
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+  # =============================
+  # NATゲートウェイ
+  # =============================
+  # プライベートサブネットが外部と通信をするためにNATゲートウェイを作成
+  NatGatewayPublic:
+    Type: AWS::EC2::NatGateway
+    DependsOn: EIP
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+          - EIP
+          - AllocationId
+      SubnetId: !Ref NATSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-nat-gateway-public
+        - Key: project
+          Value: !Sub ${TagName}
+  EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-eip
+        - Key: project
+          Value: !Sub ${TagName}
+  # =============================
+  # ルートテーブル
+  # =============================
+  # パブリックサブネット用ルートテーブル作成
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public
+        - Key: project
+          Value: !Sub ${TagName}
+  # パブリックサブネット内のリソースががインターネットに接続できるようにするためにデフォルトルート（0.0.0.0/0）を追加し、インターネットゲートウェイ経由で外部へのアクセスを許可する
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  # ALBSubnet1とPublicRouteTableを関連づけることで外部とのアクセスを可能にする
+  ALBSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref ALBSubnet1
+  # ALBSubnet2とPublicRouteTableを関連づけることで外部とのアクセスを可能にする
+  ALBSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref ALBSubnet2
+  # NATSubnetとPublicRouteTableを関連づけることで外部とのアクセスを可能にする
+  NATSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref NATSubnet
+  # プライベートサブネット用のルートテーブルを作成
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-private-routes
+        - Key: project
+          Value: !Sub ${TagName}
+  #NATGateway用のルーティングをプライベートサブネットのルートテーブルに追加する
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NatGatewayPublic
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayPublic
+  ECSSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref ECSSubnet
+  RDSSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref RDSSubnet1
+  RDSSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref RDSSubnet2
+  ManagementSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref ManagementSubnet
